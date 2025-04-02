@@ -1,0 +1,1102 @@
+---
+title: "Appendix: Exploratory analysis, survey non-response and imputation"
+author: "Frank Edwards"
+date: "`r Sys.Date()`"
+output: 
+  bookdown::pdf_document2:
+    toc: false
+    number_sections: false
+---
+
+IMPUTATION:
+
+ID CORE PREDICTORS - set in one block
+
+FOR EACH INSTRUMENT, ID VARIABLES NEEDED FOR INDEX
+ID OUTCOMES FOR MODELS 
+
+EXCLUDE OTHERS
+
+OUTCOMES LISTED IN PREREG: 
+https://clinicaltrials.gov/study/NCT05857553#study-plan
+
+SF36 
+K10
+PSS4
+CHAOS
+PSS
+FoodInsec
+MissedCare
+Truancy
+RelativeChildCare
+NonRelChildCare
+CenterCare
+CFPB FIN SCALE
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, message = F)
+library(mice)
+library(miceadds)
+library(micemd)
+library(Amelia)
+library(tidyverse)
+
+dat<-read_csv("./data/cgir_NY_ocfs_FEClean04225.csv")
+# define variable blocks
+varBlocks=list(
+  demogs=names(dat)[1:24],
+  sf=names(dat)[25:43],
+  k10=names(dat)[44:54],
+  ps=names(dat)[55:58],
+  fin=names(dat)[60:129],
+  hsg=names(dat)[130:146],
+  chaos=names(dat)[147:161],
+  am=names(dat)[162:185],
+  hhfi=names(dat)[186:190],
+  ah=names(dat)[191:202],
+  fw=names(dat)[203:212],
+  ins=names(dat)[213:215],
+  med=names(dat)[216:222],
+  scl=names(dat)[223:228],
+  chld=names(dat)[229:246],
+  pss=names(dat)[247:264]
+)
+
+imp_init<-mice(dat,
+           blocks = varBlocks,
+           maxit = 0)
+```
+
+
+
+
+
+Trial 1: subset to sf36 + demographics
+
+How do I want to do this: maybe easier to explicitly select only those columns to be imputed rather than start with everything. ID a set of core static predictors in xwalk, then work through each instrument / block. 
+
+
+## DEMOGRAPHIC PREDICTORS
+
+```{r}
+
+
+## retain excluded as characters, convert others to factor / numeric
+dat<-dat %>% 
+  mutate(GROUP = factor(GROUP),
+         County = factor(County),
+         Wave = factor(Wave),
+         Gender = factor(Gender),
+         Ethnicity = factor(Ethnicity),
+         MaritalStat = factor(MaritalStat),
+         Race = factor(Race),
+         Edu = factor(Edu),
+         LangHome = factor(LangHome),
+         SexOrient = factor(
+           case_when(
+             SexOrient == "Straight or Heterosexual" ~ "Straight or Heterosexual",
+             SexOrient != "Straight or Heterosexual" ~ "Not Straight or Heterosexual"
+           )))
+## then subset to w1 for demogs, effectively a deterministic imputation
+ 
+```
+
+## trial 1 sf36
+
+```{r}
+temp_demog<-dat %>% 
+  select(varBlocks$demogs) %>% 
+  filter(Wave == 1) %>% 
+  select(-Wave) 
+
+# pivot data to wide
+temp_sf<-dat %>% 
+  select(PIN, Wave, varBlocks$sf) %>% 
+  pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+              values_from = SF_HealthGen:SF_HealthState_4)
+
+### join to demog
+temp_sf<-temp_demog %>% 
+  left_join(temp_sf)
+
+## initiate mids object
+sf_imp<-mice(temp_sf, maxit = 0)
+# disable vars to be excluded
+sf_predmat<-sf_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# # switch them off
+# sf_predmat[, excluded_pos]<-0
+# # methods
+# sf_meth<-sf_imp$method
+# # default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+# sf_imp<-mice(temp_sf,
+#              m = 3, 
+#              method = sf_meth,
+#              predictorMatrix = sf_predmat)
+
+## problems: gender other; langhome tagalog; eduElemetnetary thru 5
+# race: combine HPI + ASIAN
+# small cell sizes there. collapse
+temp_demog<-temp_demog %>% 
+  mutate(
+    Gender = factor(case_when(
+      Gender == "Male" ~ "Male",
+      Gender != "Male" ~ "Female or other")),
+    LangHome = factor(case_when(
+      LangHome == "English" ~ "English",
+      LangHome != "English" ~ "Not English"
+    )),
+    Edu = factor(case_when(
+      Edu == "Elementary school (through Grade 5)" | 
+        Edu == "No formal education" ~ "Low or no formal education",
+      T ~ Edu
+    )),
+    Race = factor(case_when(
+      Race == "HPI" ~ "API",
+      Race == "Asian" ~ "API",
+      T ~ Race
+    ))
+  )
+
+# try again
+
+# pivot data to wide
+temp_sf<-dat %>% 
+  select(PIN, Wave, varBlocks$sf) %>% 
+  pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+              values_from = SF_HealthGen:SF_HealthState_4)
+
+### join to demog
+temp_sf<-temp_demog %>% 
+  left_join(temp_sf)
+
+## initiate mids object
+sf_imp<-mice(temp_sf, maxit = 0)
+# disable vars to be excluded
+sf_predmat<-sf_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+sf_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+sf_meth<-sf_imp$method
+sf_meth[which(!names(sf_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+sf_imp<-mice(temp_sf,
+             m = 5, 
+             method = sf_meth,
+             predictorMatrix = sf_predmat)
+
+```
+
+observed + posterior densitites of demographic variables
+
+tables for binaries and some categoricals, densities for continuous
+
+```{r}
+# imputed vars
+sf_imp$method[sf_imp$method=="pmm"]
+temp<-mice::complete(sf_imp, action = "long", include = T)
+```
+
+```{r}
+# gender
+temp %>% 
+  group_by(.imp, Gender) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n)) %>% 
+  ggplot(aes(color = .imp==0, y = prop, group = .imp,
+             x = Gender)) + 
+  geom_point(position = position_dodge(width = 0.3))
+```
+
+minimal variation on gender
+
+```{r}
+densityplot(sf_imp,
+            ~ HH_AdultsAll + HH_AdultsSome)
+```
+
+that looks fine
+
+```{r}
+temp %>% 
+  group_by(.imp, MaritalStat) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n))%>% 
+  ggplot(aes(color = .imp==0, y = prop, group = .imp,
+             x = MaritalStat)) + 
+  geom_point(position = position_dodge(width = 0.3))
+```
+
+also looks fine
+
+```{r}
+temp %>% 
+  group_by(.imp, Ethnicity, Race) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n))%>% 
+  ggplot(aes(color = .imp==0, x = n, group = .imp,
+             y = Race)) + 
+  geom_point(position = position_dodge(width = 0.3)) + 
+  facet_wrap(~Ethnicity)
+```
+
+looks fine - education
+
+```{r}
+temp %>% 
+  group_by(.imp, Edu) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n))%>% 
+  ggplot(aes(color = .imp==0, x = prop, group = .imp,
+             y = Edu)) + 
+  geom_point(position = position_dodge(width = 0.4),
+             alpha = 0.5)
+```
+
+langhome
+
+```{r}
+temp %>% 
+  group_by(.imp, LangHome) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n))%>% 
+  ggplot(aes(color = .imp==0, x = prop, group = .imp,
+             y = LangHome)) + 
+  geom_point(position = position_dodge(width = 0.4),
+             alpha = 0.5)
+```
+
+sexorient
+
+```{r}
+temp %>% 
+  group_by(.imp, SexOrient) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n))%>% 
+  ggplot(aes(color = .imp==0, x = prop, group = .imp,
+             y = SexOrient)) + 
+  geom_point(position = position_dodge(width = 0.4),
+             alpha = 0.5)
+```
+
+sf healthgen
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_HealthGen_W1 + SF_HealthGen_W2 + 
+              SF_HealthGen_W3 + SF_HealthGen_W4)
+```
+
+sf healthlim1:10
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_HealthLim_1_W1 + SF_HealthLim_1_W2 + 
+              SF_HealthLim_1_W3 + SF_HealthLim_1_W4 + 
+              SF_HealthLim_2_W1 + SF_HealthLim_2_W2 + 
+              SF_HealthLim_2_W3 + SF_HealthLim_2_W4 + 
+              SF_HealthLim_3_W1 + SF_HealthLim_3_W2 + 
+              SF_HealthLim_3_W3 + SF_HealthLim_3_W4 + 
+              SF_HealthLim_4_W1 + SF_HealthLim_4_W2 + 
+              SF_HealthLim_4_W3 + SF_HealthLim_4_W4,
+            layout = c(4,4))
+```
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_HealthLim_5_W1 + SF_HealthLim_5_W2 + 
+              SF_HealthLim_5_W3 + SF_HealthLim_5_W4 + 
+              SF_HealthLim_6_W1 + SF_HealthLim_6_W2 + 
+              SF_HealthLim_6_W3 + SF_HealthLim_6_W4 + 
+              SF_HealthLim_7_W1 + SF_HealthLim_7_W2 + 
+              SF_HealthLim_7_W3 + SF_HealthLim_7_W4 + 
+              SF_HealthLim_8_W1 + SF_HealthLim_8_W2 + 
+              SF_HealthLim_8_W3 + SF_HealthLim_8_W4,
+            layout = c(4,4))
+```
+
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_HealthLim_9_W1 + SF_HealthLim_9_W2 + 
+              SF_HealthLim_9_W3 + SF_HealthLim_9_W4 + 
+              SF_HealthLim_10_W1 + SF_HealthLim_10_W2 + 
+              SF_HealthLim_10_W3 + SF_HealthLim_10_W4,
+            layout = c(2,4))
+```
+
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_Phys_1_W1 + SF_Phys_1_W2 + 
+              SF_Phys_1_W3 + SF_Phys_1_W4 + 
+              SF_Phys_2_W1 + SF_Phys_2_W2 + 
+              SF_Phys_2_W3 + SF_Phys_2_W4 + 
+              SF_Phys_3_W1 + SF_Phys_3_W2 + 
+              SF_Phys_3_W3 + SF_Phys_3_W4 + 
+              SF_Phys_4_W1 + SF_Phys_4_W2 + 
+              SF_Phys_4_W3 + SF_Phys_4_W4,
+            layout = c(4, 4))
+```
+
+health state
+
+```{r}
+densityplot(sf_imp,
+            ~ SF_HealthState_1_W1 + SF_HealthState_1_W2 + 
+              SF_HealthState_1_W3 + SF_HealthState_1_W4 + 
+              SF_HealthState_2_W1 + SF_HealthState_2_W2 + 
+              SF_HealthState_2_W3 + SF_HealthState_2_W4 + 
+              SF_HealthState_3_W1 + SF_HealthState_3_W2 + 
+              SF_HealthState_3_W3 + SF_HealthState_3_W4 + 
+              SF_HealthState_4_W1 + SF_HealthState_4_W2 + 
+              SF_HealthState_4_W3 + SF_HealthState_4_W4,
+            layout = c(4,4))
+```
+
+## Kessler 10
+
+```{r}
+# pivot data to wide
+temp_k10<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$k10) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = K10_1:K10phys))
+```
+
+Impute
+
+```{r}
+## initiate mids object
+k10_imp<-mice(temp_k10, maxit = 0)
+# disable vars to be excluded
+k10_predmat<-k10_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+k10_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+k10_meth<-k10_imp$method
+k10_meth[which(!names(k10_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+k10_imp<-mice(temp_k10,
+             m = 5, 
+             method = k10_meth,
+             predictorMatrix = k10_predmat)
+```
+
+Evaluate diagnostics
+
+```{r}
+densityplot(k10_imp,
+            ~ K10_1_W1 + K10_1_W2 + 
+              K10_1_W3 + K10_1_W4 + 
+              K10_2_W1 + K10_2_W2 + 
+              K10_2_W3 + K10_2_W4 + 
+              K10_3_W1 + K10_3_W2 + 
+              K10_3_W3 + K10_3_W4 + 
+              K10_4_W1 + K10_4_W2 + 
+              K10_4_W3 + K10_4_W4,
+            layout = c(4, 4))
+```
+
+
+```{r}
+densityplot(k10_imp,
+            ~ K10_5_W1 + K10_5_W2 + 
+              K10_5_W3 + K10_5_W4 + 
+              K10_6_W1 + K10_6_W2 + 
+              K10_6_W3 + K10_6_W4 + 
+              K10_7_W1 + K10_7_W2 + 
+              K10_7_W3 + K10_7_W4 + 
+              K10_8_W1 + K10_8_W2 + 
+              K10_8_W3 + K10_8_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(k10_imp,
+            ~ K10_9_W1 + K10_9_W2 + 
+              K10_9_W3 + K10_9_W4 + 
+              K10_10_W1 + K10_10_W2 + 
+              K10_10_W3 + K10_10_W4 + 
+              K10phys_W1 + K10phys_W2 + 
+              K10phys_W3 + K10phys_W4,
+            layout = c(4, 3))
+```
+
+## ps
+
+```{r}
+# pivot data to wide
+temp_ps<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$ps) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = PS_2:PS_10))
+
+## initiate mids object
+ps_imp<-mice(temp_ps, maxit = 0)
+# disable vars to be excluded
+ps_predmat<-ps_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+ps_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+ps_meth<-ps_imp$method
+ps_meth[which(!names(ps_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+ps_imp<-mice(temp_ps,
+             m = 5, 
+             method = ps_meth,
+             predictorMatrix = ps_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(ps_imp,
+            ~ PS_2_W1 + PS_2_W2 + PS_2_W3 + PS_2_W4 + 
+              PS_4_W1 + PS_4_W2 + PS_4_W3 + PS_4_W4 + 
+              PS_5_W1 + PS_5_W2 + PS_5_W3 + PS_5_W4 + 
+              PS_10_W1 + PS_10_W2 + PS_10_W3 + PS_10_W4,
+            layout = c(4, 4))
+```
+
+looks fine - variance in w1 looks like small prop missing to me
+
+## Housing
+
+```{r}
+# pivot data to wide
+# do needed cleaning for small cells etc
+temp_hsg<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$hsg) %>% 
+      mutate(Hsg_Stat = ifelse(Hsg_Stat == "Rent-to-own", "Renter", Hsg_Stat)) %>% 
+      mutate(across(c(Hsg_Stat, Hsg_Qual, Hsg_NeighQual), as.factor)) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = Hsg_Stat:Hsg_MortDefault))
+
+## initiate mids object
+hsg_imp<-mice(temp_hsg, maxit = 0)
+# disable vars to be excluded
+hsg_predmat<-hsg_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther", "Hsg_StatOther",
+            "RentAssist", "Hsg_Current", "Util")
+# ID position of excludeds
+excludeds<-paste(excluded, collapse = "|")
+excluded_pos<-grep(excludeds, names(temp_hsg))
+
+# switch them off
+hsg_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+hsg_meth<-hsg_imp$method
+hsg_meth[which(!names(hsg_meth)%in%excluded)]<-"pmm"
+hsg_meth[excluded_pos]<-""
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+hsg_imp<-mice(temp_hsg,
+             m = 5, 
+             method = hsg_meth,
+             predictorMatrix = hsg_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(hsg_imp,
+            ~ Hsg_Stat_W1 + Hsg_Stat_W2 + Hsg_Stat_W3 + Hsg_Stat_W4 + 
+              Hsg_Move_W1 + Hsg_Move_W2 + Hsg_Move_W3 + Hsg_Move_W4 + 
+              Hsg_Qual_W1 + Hsg_Qual_W2 + Hsg_Qual_W3 + Hsg_Qual_W4 + 
+              Hsg_NeighQual_W1 + Hsg_NeighQual_W2 + Hsg_NeighQual_W3 + Hsg_NeighQual_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(hsg_imp,
+            ~ Hsg_RentAmt_W1 + Hsg_RentAmt_W2 + Hsg_RentAmt_W3 + Hsg_RentAmt_W4 + 
+              Hsg_Evict_W1 + Hsg_Evict_W2 + Hsg_Evict_W3 + Hsg_Evict_W4 + 
+              Hsg_MortDefault_W1 + Hsg_MortDefault_W2 + Hsg_MortDefault_W3 + Hsg_MortDefault_W4,
+            layout = c(4, 3))
+```
+
+## CHAOS
+
+```{r}
+# pivot data to wide
+temp_Chaos<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$chaos) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = Chaos_1:Chaos_15))
+
+## initiate mids object
+Chaos_imp<-mice(temp_Chaos, maxit = 0)
+# disable vars to be excluded
+Chaos_predmat<-Chaos_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+Chaos_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+Chaos_meth<-Chaos_imp$method
+Chaos_meth[which(!names(Chaos_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+Chaos_imp<-mice(temp_Chaos,
+             m = 5, 
+             method = Chaos_meth,
+             predictorMatrix = Chaos_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(Chaos_imp,
+            ~ Chaos_1_W1 + Chaos_1_W2 + Chaos_1_W3 + Chaos_1_W4 + 
+              Chaos_2_W1 + Chaos_2_W2 + Chaos_2_W3 + Chaos_2_W4 + 
+              Chaos_3_W1 + Chaos_3_W2 + Chaos_3_W3 + Chaos_3_W4 + 
+              Chaos_4_W1 + Chaos_4_W2 + Chaos_4_W3 + Chaos_4_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(Chaos_imp,
+            ~ Chaos_5_W1 + Chaos_5_W2 + Chaos_5_W3 + Chaos_5_W4 + 
+              Chaos_6_W1 + Chaos_6_W2 + Chaos_6_W3 + Chaos_6_W4 + 
+              Chaos_7_W1 + Chaos_7_W2 + Chaos_7_W3 + Chaos_7_W4 + 
+              Chaos_8_W1 + Chaos_8_W2 + Chaos_8_W3 + Chaos_8_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(Chaos_imp,
+            ~ Chaos_9_W1 + Chaos_9_W2 + Chaos_9_W3 + Chaos_9_W4 + 
+              Chaos_10_W1 + Chaos_10_W2 + Chaos_10_W3 + Chaos_10_W4 + 
+              Chaos_11_W1 + Chaos_11_W2 + Chaos_11_W3 + Chaos_11_W4 + 
+              Chaos_12_W1 + Chaos_12_W2 + Chaos_12_W3 + Chaos_12_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(Chaos_imp,
+            ~ Chaos_13_W1 + Chaos_13_W2 + Chaos_13_W3 + Chaos_13_W4 + 
+              Chaos_14_W1 + Chaos_14_W2 + Chaos_14_W3 + Chaos_14_W4 + 
+              Chaos_15_W1 + Chaos_15_W2 + Chaos_15_W3 + Chaos_15_W4, 
+            layout = c(4, 3))
+```
+
+## Adult mattering
+
+```{r}
+# pivot data to wide
+temp_am<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$am) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = AM_1:AM_24))
+
+## initiate mids object
+am_imp<-mice(temp_am, maxit = 0)
+# disable vars to be excluded
+am_predmat<-am_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+am_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+am_meth<-am_imp$method
+am_meth[which(!names(am_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+am_imp<-mice(temp_am,
+             m = 5, 
+             method = am_meth,
+             predictorMatrix = am_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(am_imp,
+            ~ AM_1_W1 + AM_1_W2 + AM_1_W3 + AM_1_W4 + 
+              AM_2_W1 + AM_2_W2 + AM_2_W3 + AM_2_W4 + 
+              AM_3_W1 + AM_3_W2 + AM_3_W3 + AM_3_W4 + 
+              AM_4_W1 + AM_4_W2 + AM_4_W3 + AM_4_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(am_imp,
+            ~ AM_5_W1 + AM_5_W2 + AM_5_W3 + AM_5_W4 + 
+              AM_6_W1 + AM_6_W2 + AM_6_W3 + AM_6_W4 + 
+              AM_7_W1 + AM_7_W2 + AM_7_W3 + AM_7_W4 + 
+              AM_8_W1 + AM_8_W2 + AM_8_W3 + AM_8_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(am_imp,
+            ~ AM_9_W1 + AM_9_W2 + AM_9_W3 + AM_9_W4 + 
+              AM_10_W1 + AM_10_W2 + AM_10_W3 + AM_10_W4 + 
+              AM_11_W1 + AM_11_W2 + AM_11_W3 + AM_11_W4 + 
+              AM_12_W1 + AM_12_W2 + AM_12_W3 + AM_12_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(am_imp,
+            ~ AM_13_W1 + AM_13_W2 + AM_13_W3 + AM_13_W4 + 
+              AM_14_W1 + AM_14_W2 + AM_14_W3 + AM_14_W4 + 
+              AM_15_W1 + AM_15_W2 + AM_15_W3 + AM_15_W4 + 
+              AM_16_W1 + AM_16_W2 + AM_16_W3 + AM_16_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(am_imp,
+            ~ AM_17_W1 + AM_17_W2 + AM_17_W3 + AM_17_W4 + 
+              AM_18_W1 + AM_18_W2 + AM_18_W3 + AM_18_W4 + 
+              AM_19_W1 + AM_19_W2 + AM_19_W3 + AM_19_W4 + 
+              AM_20_W1 + AM_20_W2 + AM_20_W3 + AM_20_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(am_imp,
+            ~ AM_21_W1 + AM_21_W2 + AM_21_W3 + AM_21_W4 + 
+              AM_22_W1 + AM_22_W2 + AM_22_W3 + AM_22_W4 + 
+              AM_23_W1 + AM_23_W2 + AM_23_W3 + AM_23_W4 + 
+              AM_24_W1 + AM_24_W2 + AM_24_W3 + AM_24_W4,
+            layout = c(4, 4))
+```
+
+## PSS
+
+```{r}
+# pivot data to wide
+temp_ps<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$ps) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = PS_2:PS_10))
+
+## initiate mids object
+ps_imp<-mice(temp_ps, maxit = 0)
+# disable vars to be excluded
+ps_predmat<-ps_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+ps_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+ps_meth<-ps_imp$method
+ps_meth[which(!names(ps_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+ps_imp<-mice(temp_ps,
+             m = 5, 
+             method = ps_meth,
+             predictorMatrix = ps_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(ps_imp,
+            ~ PS_2_W1 + PS_2_W2 + PS_2_W3 + PS_2_W4 + 
+              PS_4_W1 + PS_4_W2 + PS_4_W3 + PS_4_W4 + 
+              PS_5_W1 + PS_5_W2 + PS_5_W3 + PS_5_W4 + 
+              PS_10_W1 + PS_10_W2 + PS_10_W3 + PS_10_W4,
+            layout = c(4, 4))
+```
+
+## FoodInsec
+
+```{r}
+# pivot data to wide
+temp_hhfi<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$hhfi) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = HHFI_Insuf:HHFI_Util))
+
+## initiate mids object
+hhfi_imp<-mice(temp_hhfi, maxit = 0)
+# disable vars to be excluded
+hhfi_predmat<-hhfi_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+hhfi_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+hhfi_meth<-hhfi_imp$method
+hhfi_meth[which(!names(hhfi_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+hhfi_imp<-mice(temp_hhfi,
+             m = 5, 
+             method = hhfi_meth,
+             predictorMatrix = hhfi_predmat)
+```
+
+visualize
+
+```{r}
+## use dot plot for binary proportions
+temp<-mice::complete(hhfi_imp, action = "long", include = T)
+
+temp %>% 
+  group_by(.imp) %>% 
+  summarize(across(HHFI_Insuf_W1:HHFI_Util_W4, \(x) sum(x, na.rm=T)/ sum(!(is.na(x))))) %>% 
+  pivot_longer(cols = HHFI_Insuf_W1:HHFI_Util_W4, 
+               names_to = "var", 
+               values_to = "prop") %>% 
+  ggplot(aes(color = .imp==0, y = var,
+             x = prop)) + 
+  geom_boxplot()
+```
+
+## Adult hope
+
+```{r}
+# pivot data to wide
+temp_ah<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$ah) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = AH_1:AH_12))
+
+## initiate mids object
+ah_imp<-mice(temp_ah, maxit = 0)
+# disable vars to be excluded
+ah_predmat<-ah_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+ah_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+ah_meth<-ah_imp$method
+ah_meth[which(!names(ah_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+ah_imp<-mice(temp_ah,
+             m = 5, 
+             method = ah_meth,
+             predictorMatrix = ah_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(ah_imp,
+            ~ AH_1_W1 + AH_1_W2 + AH_1_W3 + AH_1_W4 + 
+              AH_2_W1 + AH_2_W2 + AH_2_W3 + AH_2_W4 + 
+              AH_3_W1 + AH_3_W2 + AH_3_W3 + AH_3_W4 + 
+              AH_4_W1 + AH_4_W2 + AH_4_W3 + AH_4_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(ah_imp,
+            ~ AH_5_W1 + AH_5_W2 + AH_5_W3 + AH_5_W4 + 
+              AH_6_W1 + AH_6_W2 + AH_6_W3 + AH_6_W4 + 
+              AH_7_W1 + AH_7_W2 + AH_7_W3 + AH_7_W4 + 
+              AH_8_W1 + AH_8_W2 + AH_8_W3 + AH_8_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(ah_imp,
+            ~ AH_9_W1 + AH_9_W2 + AH_9_W3 + AH_9_W4 + 
+              AH_10_W1 + AH_10_W2 + AH_10_W3 + AH_10_W4 + 
+              AH_11_W1 + AH_11_W2 + AH_11_W3 + AH_11_W4 + 
+              AH_12_W1 + AH_12_W2 + AH_12_W3 + AH_12_W4,
+            layout = c(4, 4))
+```
+
+## FW
+
+```{r}
+# pivot data to wide
+temp_fw<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$fw) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = FW_1_1:FW_2_4))
+
+## initiate mids object
+fw_imp<-mice(temp_fw, maxit = 0)
+# disable vars to be excluded
+fw_predmat<-fw_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+fw_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+fw_meth<-fw_imp$method
+fw_meth[which(!names(fw_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+fw_imp<-mice(temp_fw,
+             m = 5, 
+             method = fw_meth,
+             predictorMatrix = fw_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(fw_imp,
+            ~ FW_1_1_W1 + FW_1_1_W2 + FW_1_1_W3 + FW_1_1_W4 + 
+              FW_1_2_W1 + FW_1_2_W2 + FW_1_2_W3 + FW_1_2_W4 + 
+              FW_1_3_W1 + FW_1_3_W2 + FW_1_3_W3 + FW_1_3_W4 + 
+              FW_1_4_W1 + FW_1_4_W2 + FW_1_4_W3 + FW_1_4_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(fw_imp,
+            ~ FW_1_5_W1 + FW_1_5_W2 + FW_1_5_W3 + FW_1_5_W4 + 
+              FW_1_6_W1 + FW_1_6_W2 + FW_1_6_W3 + FW_1_6_W4 + 
+              FW_2_1_W1 + FW_2_1_W2 + FW_2_1_W3 + FW_2_1_W4 + 
+              FW_2_2_W1 + FW_2_2_W2 + FW_2_2_W3 + FW_2_2_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(fw_imp,
+            ~ FW_2_3_W1 + FW_2_3_W2 + FW_2_3_W3 + FW_2_3_W4 + 
+              FW_2_4_W1 + FW_2_4_W2 + FW_2_4_W3 + FW_2_4_W4,
+            layout = c(4, 2))
+```
+
+## Insurance and Medical
+
+```{r}
+# pivot data to wide
+temp_ins<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, c(varBlocks$ins, varBlocks$med)) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = c(ParentInsurance:ChildInsuranceNo, MedicalAccess)))
+
+## initiate mids object
+ins_imp<-mice(temp_ins, maxit = 0)
+# disable vars to be excluded
+ins_predmat<-ins_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+ins_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+ins_meth<-ins_imp$method
+ins_meth[which(!names(ins_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+ins_imp<-mice(temp_ins,
+             m = 5, 
+             method = ins_meth,
+             predictorMatrix = ins_predmat)
+```
+
+visualize
+
+```{r}
+## use dot plot for binary proportions
+temp<-mice::complete(ins_imp, action = "long", include = T)
+
+temp %>% 
+  group_by(.imp) %>% 
+  summarize(across(ParentInsurance_W1:MedicalAccess_W4, \(x) sum(x, na.rm=T)/ sum(!(is.na(x))))) %>% 
+  pivot_longer(cols = ParentInsurance_W1:MedicalAccess_W4, 
+               names_to = "var", 
+               values_to = "prop") %>% 
+  ggplot(aes(color = .imp==0, y = var,
+             x = prop)) + 
+  geom_boxplot()
+```
+
+## Truancy 
+
+way too much missing data on child care to work with - going to ditch it. for w1, we've got 87% missing for center care
+
+```{r}
+### compute rowmeans, then impute the missings unless nchild = 0
+dat<-dat %>% 
+  rowwise() %>% 
+  mutate(ChildMissSchool_mn = mean(c(
+    ChildMissSchool1,ChildMissSchool2,
+    ChildMissSchool2, ChildMissSchool3,
+    ChildMissSchool4, ChildMissSchool5,
+    ChildMissSchool6),
+    na.rm=T))
+
+# pivot data to wide
+temp_scl<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, ChildMissSchool_mn, 
+             childcare_relative_total, childcare_nonrelative_total,
+             childcare_center_total) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = c(ChildMissSchool_mn:childcare_center_total)))
+
+## initiate mids object
+scl_imp<-mice(temp_scl, maxit = 0)
+# disable vars to be excluded
+scl_predmat<-scl_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_sf)%in%excluded)
+# switch them off
+scl_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+scl_meth<-scl_imp$method
+scl_meth[which(!names(scl_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+scl_imp<-mice(temp_scl,
+             m = 5, 
+             method = scl_meth,
+             predictorMatrix = scl_predmat)
+
+```
+
+missed school
+
+```{r}
+densityplot(scl_imp,
+            ~ ChildMissSchool_mn_W1 + ChildMissSchool_mn_W2 + ChildMissSchool_mn_W3 + ChildMissSchool_mn_W4,
+            layout = c(4,1))
+```
+
+
+## PSS
+
+```{r}
+# pivot data to wide
+temp_pss<-temp_demog %>% 
+  left_join(
+    dat %>% 
+      select(PIN, Wave, varBlocks$pss) %>% 
+      pivot_wider(id_cols = PIN, names_from = Wave, names_sep = "_W",
+                  values_from = ParentalStressScale_1:ParentalStressScale_18))
+
+## initiate mids object
+pss_imp<-mice(temp_pss, maxit = 0)
+# disable vars to be excluded
+pss_predmat<-pss_imp$predictorMatrix
+# ID POSITION of vars
+excluded<-c("PIN", "InWave", "SurveyStart", "DOB", 
+            "PartnerStat", "PartnerGender", "EduOther",
+            "LangOther")
+excluded_pos<-which(names(temp_pss)%in%excluded)
+# switch them off
+pss_predmat[, excluded_pos]<-0
+# methods, use pmm for all, logreg and polyreg aren't working well
+pss_meth<-pss_imp$method
+pss_meth[which(!names(pss_meth)%in%excluded)]<-"pmm"
+# default is pmm for numeric, polyreg for categorical, logreg for binary. that's good here
+pss_imp<-mice(temp_pss,
+             m = 5, 
+             method = ps_meth,
+             predictorMatrix = ps_predmat)
+```
+
+visualize
+
+```{r}
+densityplot(pss_imp,
+            ~ ParentalStressScale_1_W1 + ParentalStressScale_1_W2 + ParentalStressScale_1_W3 + ParentalStressScale_1_W4 + 
+              ParentalStressScale_2_W1 + ParentalStressScale_2_W2 + ParentalStressScale_2_W3 + ParentalStressScale_2_W4 + 
+              ParentalStressScale_3_W1 + ParentalStressScale_3_W2 + ParentalStressScale_3_W3 + ParentalStressScale_3_W4 + 
+              ParentalStressScale_4_W1 + ParentalStressScale_4_W2 + ParentalStressScale_4_W3 + ParentalStressScale_4_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(pss_imp,
+            ~ ParentalStressScale_5_W1 + ParentalStressScale_5_W2 + ParentalStressScale_5_W3 + ParentalStressScale_5_W4 + 
+              ParentalStressScale_6_W1 + ParentalStressScale_6_W2 + ParentalStressScale_6_W3 + ParentalStressScale_6_W4 + 
+              ParentalStressScale_7_W1 + ParentalStressScale_7_W2 + ParentalStressScale_7_W3 + ParentalStressScale_7_W4 + 
+              ParentalStressScale_8_W1 + ParentalStressScale_8_W2 + ParentalStressScale_8_W3 + ParentalStressScale_8_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(pss_imp,
+            ~ ParentalStressScale_9_W1 + ParentalStressScale_9_W2 + ParentalStressScale_9_W3 + ParentalStressScale_9_W4 + 
+              ParentalStressScale_10_W1 + ParentalStressScale_10_W2 + ParentalStressScale_10_W3 + ParentalStressScale_10_W4 + 
+              ParentalStressScale_11_W1 + ParentalStressScale_11_W2 + ParentalStressScale_11_W3 + ParentalStressScale_11_W4 + 
+              ParentalStressScale_12_W1 + ParentalStressScale_12_W2 + ParentalStressScale_12_W3 + ParentalStressScale_12_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(pss_imp,
+            ~ ParentalStressScale_13_W1 + ParentalStressScale_13_W2 + ParentalStressScale_13_W3 + ParentalStressScale_13_W4 + 
+              ParentalStressScale_14_W1 + ParentalStressScale_14_W2 + ParentalStressScale_14_W3 + ParentalStressScale_14_W4 + 
+              ParentalStressScale_15_W1 + ParentalStressScale_15_W2 + ParentalStressScale_15_W3 + ParentalStressScale_15_W4 + 
+              ParentalStressScale_16_W1 + ParentalStressScale_16_W2 + ParentalStressScale_16_W3 + ParentalStressScale_16_W4,
+            layout = c(4, 4))
+```
+
+```{r}
+densityplot(pss_imp,
+            ~ ParentalStressScale_17_W1 + ParentalStressScale_17_W2 + ParentalStressScale_17_W3 + ParentalStressScale_17_W4 + 
+              ParentalStressScale_18_W1 + ParentalStressScale_18_W2 + ParentalStressScale_18_W3 + ParentalStressScale_18_W4,
+            layout = c(4, 2))
+```
+
+
+## Joint imputation
+
+
+
+## check relationships between high missingness and demogs / wave / group

@@ -21,18 +21,44 @@ for(i in 1:max(dat$.imp)){
   dat_list[[i]]<-dat %>% 
     filter(.imp==i)
 }
+# weakly informative priors
+priorsN<-c(
+  prior(normal(0,2), class = "b"),
+  prior(normal(0,2), class = "Intercept"),
+  prior(student_t(3, 0, 2.5), class = "sd"),
+  prior(student_t(3, 0, 2.5), class = "sigma"))
+# function to estimate Normal likelihood model 
+estimate_Normal<-function(x, outcome, family){
+  f<-as.formula(
+    paste(outcome,
+          "GROUP*factor(Wave)+factor(County)+(1|PIN)",
+          sep = "~"))
+  m0<-brm_multiple(f,
+            data = x, 
+            family = family,
+            prior = priorsN,
+            iter = 1e4)
+  return(m0)
+}
 
-# two models to consider
-# one: t * w, each wave a time unit
-# two: 
+# list outcomes for Normal likelihood
+outcomesNormal<-names(dat)[34:48]
+# add scale to z transform
+outcomesNormal<-paste("scale(", 
+                      outcomesNormal,
+                      ")",
+                      sep = "")
 
-# model outcomes in order
-# come back to categoricals and non-index vars
+# fit models to normalized outcomes
+modelsNormal<-list()
+for(i in outcomesNormal){
+  outcome<-i
+  family<-"Gaussian"
+  modelsNormal[[i]]<-estimate_Normal(
+    dat_list,
+    outcome,
+    family)
+}
 
-m_MissSchool<-brm_multiple(ChildMissSchool_mn ~ 
-                      GROUP * factor(Wave) +
-                      (1|PIN) + (1|County),
-                    data = dat_list)
-
-### m1 as pooled treatment period + pre + post vs control
-
+# store models
+saveRDS(modelsNormal, file = "NormalModels.RDS")

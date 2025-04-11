@@ -1,15 +1,13 @@
-#### TITLE 
-#### project: 
+#### models.R
+#### project: cgir_survey_parser
 #### Author: Frank Edwards
 #### Email:  frank.edwards@rutgers.edu
-#### repo: 
 #
-# log: 
-#
+# log: estimate regression models using 
+# imputed survey data, depends on process_imputed.R
 #----------------------------------------
 
 library(tidyverse)
-library(lme4)
 library(brms)
 options(mc.cores = parallel::detectCores())
 
@@ -37,7 +35,8 @@ estimate_Normal<-function(x, outcome, family){
             data = x, 
             family = family,
             prior = priorsN,
-            iter = 1e4)
+            iter = 1e4,
+            cores = 8)
   return(m0)
 }
 

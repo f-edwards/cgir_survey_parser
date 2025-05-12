@@ -15,7 +15,6 @@ library(miceadds)
 dat<-read_csv("./data/cgir_NY_ocfs_FEClean04225.csv")
 ### drop vars not imputed (except PIN for join)
 
-
 #### MISC CLEANING FROM APPX.RMD
 dat<-dat %>% 
   mutate(GROUP = factor(GROUP),
@@ -53,6 +52,7 @@ excluded<-c("SurveyStart", "DOB",
             "ChildMissSchool6",
             "Fin_", "HH_Children",
             "Services")
+
 excludeds<-paste(excluded, collapse = "|")
 excludeds<-names(dat)[grep(excludeds, names(dat))]
 dat<-dat %>% 
@@ -61,7 +61,7 @@ dat<-dat %>%
 ### RE WORK NOW THAT I DONT HAVE THE BLOCKS 
 ### SET DEMOGRAPHICS
 temp_demog<-dat %>% 
-  select(PIN:SexOrient) %>% 
+  select(PIN:Wave, Age_c:SexOrient) %>% 
   filter(Wave == 1) %>% 
   select(-Wave) 
 

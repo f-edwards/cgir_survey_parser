@@ -11,7 +11,7 @@ library(tidyverse)
 
 # import ------------------------------------------------------------------
 # use Age to count for Children2
-w1<-read_csv("./data/baseline_clean.csv",
+w1<-read_csv("./data/w1_clean.csv",
              col_types = cols(.default = "c"))%>% 
   mutate(Children2 =  as.character(
     6 - 
@@ -86,7 +86,7 @@ dat_long<-bind_rows(
   w2_c,
   w3_c,
   w4_c) %>% 
-  mutate(InWave = ifelse(is.na(Q6_1), T, F))
+  mutate(InWave = ifelse(is.na(Q6_1), F, T))
 
 # parse instruments -------------------------------------------------------
 # in codebook order: 
@@ -790,7 +790,7 @@ dat_long<-dat_long %>%
          ChildMissSchool1:ChildMissSchool6,
          RelativeCareHours1:CenterCareHours6,
          ParentalStressScale_1:ParentalStressScale_18) 
-
+  
 
 write_csv(dat_long, 
           "./data/cgir_NY_ocfs_FEClean04225.csv")
